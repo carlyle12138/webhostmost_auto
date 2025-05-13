@@ -22,14 +22,16 @@ async function delayTime(ms) {
 
     let url = `https://server${panelnum}.webhostmost.com:2222/evo/login`;
     console.log(`登录地址：${url}`);
+    const usernameSelector = 'input[id="username"]';
 
     try {
       // 修改网址为新的登录页面
-      await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
-      await page.waitForSelector('input[id="username"]', { visible: true, timeout: 30000 });
+      await page.goto(url);
+      await page.waitForSelector(usernameSelector, { visible: true, timeout: 30000 });
+      console.log(`Found username input: ${usernameSelector}`);
 
       // 清空用户名输入框的原有值
-      const usernameInput = await page.$('input[id="username"]');
+      const usernameInput = await page.$(usernameSelector);
       if (usernameInput) {
         await usernameInput.click({ clickCount: 3 }); // 选中输入框的内容
         await usernameInput.press('Backspace'); // 删除原来的值
