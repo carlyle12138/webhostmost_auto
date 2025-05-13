@@ -1,9 +1,8 @@
 const fs = require('fs');
 const puppeteer = require('puppeteer');
 
-// Replicates the original's actual output format: YYYY-MM-DD HH:MM:SS.mmm
 function formatToISO(date) {
-  return date.toISOString().replace('T', ' ').replace('Z', '');
+  return date.toISOString().replace('T', ' ').replace('Z', '').replace(/\.\d{3}Z/, '');
 }
 
 async function delayTime(ms) {
@@ -11,105 +10,75 @@ async function delayTime(ms) {
 }
 
 (async () => {
-  // Read accounts.json
-  let accounts;
-  try {
-    const accountsJson = fs.readFileSync('accounts.json', 'utf-8');
-    accounts = JSON.parse(accountsJson);
-    if (!Array.isArray(accounts)) {
-        throw new Error('accounts.json should contain a JSON array.');
-    }
-  } catch (error) {
-    console.error('Error reading or parsing accounts.json:', error.message);
-    console.error('Please ensure accounts.json exists, is valid JSON, and contains an array of accounts.');
-    process.exit(1); // Exit if accounts file is problematic
-  }
-
+  // 读取 accounts.json 中的 JSON 字符串
+  const accountsJson = fs.readFileSync('accounts.json', 'utf-8');
+  const accounts = JSON.parse(accountsJson);
 
   for (const account of accounts) {
     const { username, password, panelnum } = account;
 
-    if (!username || !password || !panelnum) {
-        console.warn(`Skipping account entry due to missing username, password, or panelnum: ${JSON.stringify(account)}`);
-        continue;
-    }
-
-    // For GitHub Actions or headless environments, set headless: true and add appropriate args.
-    // e.g. { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] }
     const browser = await puppeteer.launch({ headless: false });
     const page = await browser.newPage();
 
-    // Construct the URL for webhostmost.com
     let url = `https://server${panelnum}.webhostmost.com:2222/evo/login`;
 
     try {
-      console.log(`Attempting to login for ${username} on ${url}`);
-      await page.goto(url, { waitUntil: 'networkidle0' }); // More robust wait
+      // 修改网址为新的登录页面
+      await page.goto(url);
 
-      // Selectors for webhostmost.com DirectAdmin Evolution login
-      const usernameSelector = 'input[name="username"]';
-      const passwordSelector = 'input[name="password"]';
-      const loginButtonSelector = 'button[type="submit"]'; // Common for DA Evo
-
-      // Wait for the username input to be available
-      await page.waitForSelector(usernameSelector, { visible: true });
-
-      // Clear username input field (emulating original script's behavior)
-      const usernameInput = await page.$(usernameSelector);
+      // 清空用户名输入框的原有值
+      const usernameInput = await page.$('input[id="username"]');
       if (usernameInput) {
-        await usernameInput.click({ clickCount: 3 }); // Select existing content
-        await usernameInput.press('Backspace');      // Delete it
-        await usernameInput.type(username);
-      } else {
-        throw new Error(`Username input field ('${usernameSelector}') not found.`);
+        await usernameInput.click({ clickCount: 3 }); // 选中输入框的内容
+        await usernameInput.press('Backspace'); // 删除原来的值
       }
 
-      // Type password
-      await page.waitForSelector(passwordSelector, { visible: true });
-      await page.type(passwordSelector, password);
+      // 输入实际的账号和密码
+      await page.type('input[id="username"]', username);
+      await page.type('input[id="password"]', password);
 
-      // Submit login form
-      const loginButton = await page.$(loginButtonSelector);
+      // 提交登录表单
+      const loginButton = await page.$('button[type="submit"]');
       if (loginButton) {
-        // It's often better to combine click and navigation waiting
-        await Promise.all([
-          page.waitForNavigation({ waitUntil: 'networkidle0' }), // Wait for navigation to complete
-          loginButton.click(),
-        ]);
+        await loginButton.click();
       } else {
-        throw new Error(`Login button ('${loginButtonSelector}') not found.`);
+        throw new Error('无法找到登录按钮');
       }
 
-      // Check if login was successful by looking for a logout link (common in DirectAdmin)
+      // 等待登录成功（如果有跳转页面的话）
+      await page.waitForNavigation();
+
+      // 判断是否登录成功
       const isLoggedIn = await page.evaluate(() => {
-        // DirectAdmin Evolution typically has a logout link containing CMD_LOGOUT
-        const logoutButton = document.querySelector('a[href*="CMD_LOGOUT"]');
+        const logoutButton = await page.$('button[title="Logout"]');
         return logoutButton !== null;
       });
 
       if (isLoggedIn) {
-        const nowUtc = formatToISO(new Date()); // UTC time (as per original behavior of new Date() then format)
-        const nowBeijing = formatToISO(new Date(new Date().getTime() + 8 * 60 * 60 * 1000)); // Beijing time
-        console.log(`Account ${username} successfully logged in at Beijing time ${nowBeijing} (UTC time ${nowUtc}).`);
+        // 获取当前的UTC时间和北京时间
+        const nowUtc = formatToISO(new Date());// UTC时间
+        const nowBeijing = formatToISO(new Date(new Date().getTime() + 8 * 60 * 60 * 1000)); // 北京时间东8区，用算术来搞
+        console.log(`账号 ${username} 于北京时间 ${nowBeijing}（UTC时间 ${nowUtc}）登录成功！`);
       } else {
-        // Try to get current URL if login failed to provide more context
-        const currentUrl = page.url();
-        console.error(`Account ${username} login failed. Please check credentials. Current URL: ${currentUrl}`);
+        console.error(`账号 ${username} 登录失败，请检查账号和密码是否正确。`);
       }
     } catch (error) {
-      const currentUrlAttempt = page ? page.url() : 'N/A';
-      console.error(`Error during login for account ${username}: ${error.message}. Current URL: ${currentUrlAttempt}`);
+      console.error(`账号 ${username} 登录时出现错误: ${error}`);
     } finally {
-      // Close page and browser
-      if (page) await page.close();
-      if (browser) await browser.close();
+      // 关闭页面和浏览器
+      await page.close();
+      await browser.close();
 
-      // Random delay between users
-      const delay = Math.floor(Math.random() * 7000) + 1000; // 1 to 8 seconds
-      console.log(`Waiting for ${delay / 1000} seconds before processing next account...`);
+      // 用户之间添加随机延时
+      const delay = Math.floor(Math.random() * 8000) + 1000; // 随机延时1秒到8秒之间
       await delayTime(delay);
     }
   }
 
-  console.log('All accounts processed.');
+  console.log('所有账号登录完成！');
 })();
+
+// 自定义延时函数
+function delayTime(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
