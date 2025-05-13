@@ -50,7 +50,7 @@ async function delayTime(ms) {
 
       // 判断是否登录成功
       const isLoggedIn = await page.evaluate(() => {
-        const logoutButton = await page.$('button[title="Logout"]');
+        const logoutButton = document.querySelector('button[title="Logout"]');
         return logoutButton !== null;
       });
 
