@@ -49,6 +49,8 @@ async function delayTime(ms) {
         throw new Error('无法找到登录按钮');
       }
 
+      console.log(`提交登录，等待跳转`);
+
       // 等待登录成功（如果有跳转页面的话）
       await page.waitForNavigation();
 
@@ -57,6 +59,8 @@ async function delayTime(ms) {
         const logoutButton = document.querySelector('button[title="Logout"]');
         return logoutButton !== null;
       });
+
+      console.log(`登录状态：${isLoggedIn}`);
 
       if (isLoggedIn) {
         // 获取当前的UTC时间和北京时间
