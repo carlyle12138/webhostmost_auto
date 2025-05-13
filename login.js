@@ -1,114 +1,179 @@
 const fs = require('fs');
 const puppeteer = require('puppeteer');
 
-function formatToISO(date) {
-  return date.toISOString().slice(0, 19).replace('T', ' ');
+// Helper function to format date to a readable ISO-like string (YYYY-MM-DD HH:MM:SS)
+function formatReadableDateTime(date) {
+  // Pad single digits with leading zero
+  const pad = (num) => num.toString().padStart(2, '0');
+
+  const year = date.getFullYear();
+  const month = pad(date.getMonth() + 1); // Months are 0-indexed
+  const day = pad(date.getDate());
+  const hours = pad(date.getHours());
+  const minutes = pad(date.getMinutes());
+  const seconds = pad(date.getSeconds());
+
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
+// Helper function for delay
 async function delayTime(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 (async () => {
-  const accountsJson = fs.readFileSync('accounts.json', 'utf-8');
-  const accounts = JSON.parse(accountsJson);
+  let browser = null; // Initialize browser variable outside the loop
 
-  for (const account of accounts) {
-    const { username, password, panelnum } = account;
-    let browser;
-    let page; // Declare page here to use in potential error screenshot
+  try {
+    // Read accounts from accounts.json
+    const accountsJson = fs.readFileSync('accounts.json', 'utf-8');
+    const accounts = JSON.parse(accountsJson);
+    console.log(`读取到 ${accounts.length} 个账号信息。`);
 
-    try {
-      browser = await puppeteer.launch({ headless: false }); // Consider headless: 'new' or true
-      page = await browser.newPage();
+    // Launch the browser once before the loop
+    // Use 'new' for the modern headless mode, false for visible browser (debugging)
+    browser = await puppeteer.launch({ headless: 'new' }); 
+    console.log('浏览器已启动...');
 
-      let url = `https://server${panelnum}.webhostmost.com:2222/evo/login`;
-      console.log(`登录地址：${url}`);
-      const usernameSelector = 'input[id="username"]';
-      const passwordSelector = 'input[id="password"]';
-      const loginButtonSelector = 'button[type="submit"]';
+    for (const account of accounts) {
+      // Use panelnum from the account object
+      const { username, password, panelnum } = account; 
+      let page = null; // Initialize page variable inside the loop for isolation
 
-      await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
-      await page.waitForSelector(usernameSelector, { visible: true, timeout: 30000 });
-      console.log(`Found username input: ${usernameSelector}`);
+      // Construct the URL dynamically for webhostmost
+      const url = `https://server${panelnum}.webhostmost.com:2222/evo/login`;
 
-      await page.evaluate((selector) => {
-        const el = document.querySelector(selector);
-        if (el) el.value = '';
-      }, usernameSelector);
-
-      await page.type(usernameSelector, username);
-      await page.type(passwordSelector, password);
-
-      console.log(`准备点击登录按钮`);
-      // Click the login button
-      await page.click(loginButtonSelector);
-      console.log(`登录按钮已点击，等待页面跳转或内容变化`);
-
-      // Wait for the URL to contain '/evo/' which indicates successful redirection to the dashboard
-      // This is more robust than waitForNavigation in cases of XHR logins + multiple redirects
-      const dashboardUrlPart = '/evo/';
       try {
-        await page.waitForFunction(
-          (expectedUrlPart) => window.location.pathname.includes(expectedUrlPart),
-          { timeout: 45000 }, // Increased timeout
-          dashboardUrlPart
-        );
-        console.log(`成功导航到包含 "${dashboardUrlPart}" 的URL. 当前URL: ${page.url()}`);
-      } catch (navError) {
-        console.error(`等待URL包含 "${dashboardUrlPart}" 时超时或出错. 当前URL: ${page.url()}`);
-        // If waitForFunction fails, it's a strong indicator login didn't proceed as expected
-        // Take a screenshot before throwing to see the page state
-        const navFailureScreenshotPath = `nav_failure_${username}_${Date.now()}.png`;
-        await page.screenshot({ path: navFailureScreenshotPath, fullPage: true });
-        console.error(`Navigation failure screenshot: ${navFailureScreenshotPath}`);
-        throw navError; // Re-throw the error to be caught by the main try-catch
-      }
+        // Open a new page for each account attempt
+        page = await browser.newPage();
+        console.log(`\n[账号: ${username} | 服务器: server${panelnum}] 开始处理...`);
+        console.log(`导航到: ${url}`);
 
-      // At this point, we should be on the dashboard page if waitForFunction succeeded
-      // You can add an additional waitForSelector for a specific dashboard element if needed for extra certainty
-      // e.g., await page.waitForSelector('.dashboard-specific-element', { visible: true, timeout: 10000 });
+        // Navigate to the login page
+        // waitUntil: 'networkidle0' waits until there are no network connections for 500ms
+        await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 }); 
 
-      const isLoggedIn = await page.evaluate(() => {
-        const logoutButton = document.querySelector('button[title="Logout"], a[href*="logout"]'); // Adjust selector
-        return logoutButton !== null;
-      });
+        // --- Interact with the webhostmost login form ---
 
-      console.log(`登录状态：${isLoggedIn}`);
+        // Selector for username input (adjust if needed based on inspection)
+        const usernameSelector = 'input[name="username"]';
+        // Selector for password input (adjust if needed based on inspection)
+        const passwordSelector = 'input[name="password"]';
+        // Selector for the login button (adjust if needed)
+        const loginButtonSelector = 'button[type="submit"]'; 
 
-      if (isLoggedIn) {
-        const nowUtc = formatToISO(new Date());
-        const nowBeijing = formatToISO(new Date(new Date().getTime() + 8 * 60 * 60 * 1000));
-        console.log(`账号 ${username} 于北京时间 ${nowBeijing}（UTC时间 ${nowUtc}）登录成功！`);
-      } else {
-        const failureScreenshotPath = `login_failure_${username}_${Date.now()}.png`;
-        await page.screenshot({ path: failureScreenshotPath, fullPage: true });
-        console.error(`账号 ${username} 登录失败 (未找到登出按钮). 请检查凭据或页面结构. Screenshot: ${failureScreenshotPath}`);
-        console.error(`Current URL after attempted login: ${page.url()}`);
+        // Wait for the username field to be ready before interacting
+        await page.waitForSelector(usernameSelector, { visible: true });
+
+        // Clear username field (optional but safer) and type username
+        const usernameInput = await page.$(usernameSelector);
+        if (usernameInput) {
+           // Using evaluate to clear is sometimes more reliable than click/backspace
+           await page.evaluate(selector => { document.querySelector(selector).value = ''; }, usernameSelector);
+           await page.type(usernameSelector, username);
+           console.log(`输入用户名: ${username}`);
+        } else {
+            throw new Error(`无法找到用户名输入框 (${usernameSelector})`);
+        }
+        
+        // Type password
+        await page.type(passwordSelector, password);
+        console.log('输入密码。');
+
+
+        // Click the login button and wait for navigation/response
+        console.log('点击登录按钮...');
+        const loginButton = await page.$(loginButtonSelector);
+        if (loginButton) {
+            // Use Promise.all to click and wait for navigation simultaneously
+            // If login is AJAX based and doesn't navigate, waitForNavigation might timeout.
+            // The catch block prevents the script from crashing if timeout occurs.
+            // We rely on the cookie check afterwards regardless.
+            await Promise.all([
+                loginButton.click(),
+                page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 30000 }) // Adjust timeout if needed
+                    .catch(e => console.log(`导航等待超时或无导航事件 (可能为AJAX登录)，将继续检查Cookie... Error: ${e.message}`))
+            ]);
+        } else {
+            throw new Error(`无法找到登录按钮 (${loginButtonSelector})`);
+        }
+        
+        // Add a small delay to ensure cookies are set and page state settles
+        await delayTime(2500); 
+
+        // --- Login Verification: Check for 'session' cookie ---
+        console.log('检查登录状态 (寻找 "session" Cookie)...');
+        const cookies = await page.cookies();
+        const sessionCookie = cookies.find(cookie => cookie.name === 'session');
+
+        // Get current times for logging
+        const nowUtc = formatReadableDateTime(new Date()); // UTC time
+        const nowBeijing = formatReadableDateTime(new Date(Date.now() + 8 * 60 * 60 * 1000)); // Beijing time
+
+        if (sessionCookie) {
+            console.log(`✅ [账号: ${username}] 登录成功！(检测到 "session" Cookie)`);
+            console.log(`   北京时间: ${nowBeijing}`);
+            console.log(`   UTC 时间: ${nowUtc}`);
+        } else {
+            console.error(`❌ [账号: ${username}] 登录失败。未找到 "session" Cookie。`);
+             // Optional: Try to find an error message on the page
+             try {
+                const errorElement = await page.$('.alert.alert-danger'); // Common selector for errors in Bootstrap-like frameworks
+                if (errorElement) {
+                    const errorMessage = await page.evaluate(el => el.innerText.trim(), errorElement);
+                    console.error(`   页面提示信息: ${errorMessage}`);
+                } else {
+                    console.error(`   未在页面上检测到明确的错误消息。`);
+                }
+             } catch (evalError) {
+                console.error(`   检查页面错误信息时出错: ${evalError.message}`);
+             }
+             // Optional: Save screenshot on failure for debugging
+             const screenshotPath = `failure_${username}_${panelnum}_${Date.now()}.png`;
+             await page.screenshot({ path: screenshotPath });
+             console.log(`   登录失败截图已保存: ${screenshotPath}`);
+        }
+
+      } catch (error) {
+        const nowUtc = formatReadableDateTime(new Date()); // UTC time
+        const nowBeijing = formatReadableDateTime(new Date(Date.now() + 8 * 60 * 60 * 1000)); // Beijing time
+        console.error(`❌ [账号: ${username} | 服务器: server${panelnum}] 处理时发生错误: ${error.message}`);
+        console.error(`   发生时间 (北京): ${nowBeijing}`);
+        console.error(`   发生时间 (UTC): ${nowUtc}`);
+         // Optional: Save screenshot on unexpected errors
+         if (page) {
+            try {
+                const errorScreenshotPath = `error_${username}_${panelnum}_${Date.now()}.png`;
+                await page.screenshot({ path: errorScreenshotPath });
+                console.log(`   错误截图已保存: ${errorScreenshotPath}`);
+            } catch(ssError) {
+                console.error(`   无法保存错误截图: ${ssError.message}`);
+            }
+         }
+      } finally {
+        // Close the page after processing the current account
+        if (page) {
+          await page.close();
+          console.log(`[账号: ${username}] 页面已关闭。`);
+        }
+
+        // Add random delay between accounts to avoid overwhelming the server
+        const delay = Math.floor(Math.random() * 7000) + 1000; // Random delay 1s to 8s
+        console.log(`--- 暂停 ${delay / 1000} 秒后处理下一个账号 ---`);
+        await delayTime(delay);
       }
-    } catch (error) {
-      console.error(`账号 ${username} 登录时出现错误: ${error}`);
-      if (error.name === 'TimeoutError') {
-        console.error('A timeout occurred. The page might not have loaded correctly, or an element was not found, or navigation took too long.');
-      }
-      if (page && !page.isClosed()) {
-          try {
-            const errorScreenshotPath = `error_${username}_${Date.now()}.png`;
-            await page.screenshot({ path: errorScreenshotPath, fullPage: true });
-            console.error(`Screenshot taken on error: ${errorScreenshotPath}`);
-            console.error(`URL at time of error: ${page.url()}`);
-          } catch (screenshotError) {
-            console.error(`Could not take screenshot on error: ${screenshotError}`);
-          }
-      }
-    } finally {
-      if (browser) {
-        await browser.close();
-      }
-      const delay = Math.floor(Math.random() * 8000) + 1000;
-      console.log(`Waiting for ${delay / 1000} seconds before next account...`);
-      await delayTime(delay);
+    } // End of for...of loop
+
+    console.log('\n✅ 所有账号处理完成！');
+
+  } catch (error) {
+    // Catch errors occurring outside the account loop (e.g., reading file, launching browser)
+    console.error(`脚本执行过程中发生严重错误: ${error}`);
+  } finally {
+    // Close the browser instance after all accounts are processed or if an error occurred
+    if (browser) {
+      await browser.close();
+      console.log('浏览器已关闭。');
     }
   }
-  console.log('所有账号登录完成！');
 })();
