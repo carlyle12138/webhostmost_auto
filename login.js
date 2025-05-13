@@ -21,10 +21,12 @@ async function delayTime(ms) {
     const page = await browser.newPage();
 
     let url = `https://server${panelnum}.webhostmost.com:2222/evo/login`;
+    console.log(`登录地址：${url}`);
 
     try {
       // 修改网址为新的登录页面
-      await page.goto(url);
+      await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
+      await page.waitForSelector('input[id="username"]', { visible: true, timeout: 30000 });
 
       // 清空用户名输入框的原有值
       const usernameInput = await page.$('input[id="username"]');
